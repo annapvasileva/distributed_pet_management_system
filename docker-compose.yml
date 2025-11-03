@@ -1,0 +1,186 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: password
+    restart: unless-stopped
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 20s
+
+  pet-service:
+    build: ./pet-service
+    container_name: pet-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres-pets:
+        condition: service_healthy
+      flyway:
+        condition: service_completed_successfully
+      gateway-service:
+        condition: service_healthy
+    environment:
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - SPRING_RABBITMQ_PORT=5672
+      - SPRING_RABBITMQ_USERNAME=admin
+      - SPRING_RABBITMQ_PASSWORD=password
+    networks:
+      - app_network
+
+  owner-service:
+    build: ./owner-service
+    container_name: owner-service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres-owners:
+        condition: service_healthy
+      flyway:
+        condition: service_completed_successfully
+      gateway-service:
+        condition: service_healthy
+    environment:
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - SPRING_RABBITMQ_PORT=5672
+      - SPRING_RABBITMQ_USERNAME=admin
+      - SPRING_RABBITMQ_PASSWORD=password
+    networks:
+      - app_network
+
+  gateway-service:
+    build: ./gateway-service
+    container_name: gateway-service
+    ports:
+      - "8000:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres-gateway:
+        condition: service_healthy
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - SPRING_RABBITMQ_PORT=5672
+      - SPRING_RABBITMQ_USERNAME=admin
+      - SPRING_RABBITMQ_PASSWORD=password
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/actuator/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - app_network
+
+  postgres-gateway:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: gateway
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5005:5432"
+    volumes:
+      - gateway_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  postgres-pets:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: pets
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5006:5432"
+    volumes:
+      - pets_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  postgres-owners:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: owners
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    ports:
+      - "5007:5432"
+    volumes:
+      - owners_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  flyway:
+    build: ./flyway-migrations
+    depends_on:
+      postgres-gateway:
+        condition: service_healthy
+      postgres-pets:
+        condition: service_healthy
+      postgres-owners:
+        condition: service_healthy
+    networks:
+      - app_network
+
+  pgadmin:
+    container_name: pgadmin
+    image: dpage/pgadmin4:latest
+    hostname: pgadmin
+    restart: unless-stopped
+    ports:
+      - "5008:80"
+    environment:
+      - PGADMIN_DEFAULT_PASSWORD=pass
+      - PGADMIN_DEFAULT_EMAIL=postgres@postgres.com
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+    networks:
+      - app_network
+
+volumes:
+  gateway_data:
+  pets_data:
+  owners_data:
+  rabbitmq_data:
+
+networks:
+  app_network:
+    driver: bridge
